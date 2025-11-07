@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  CENT_BIT_STEP,
+  CENT_ZBIT_STEP,
   SharenoteError,
   ReliabilityId,
   HashrateUnit,
@@ -14,48 +14,68 @@ import {
   divideNote,
   expectedHashesForNote,
   formatNoteLabel,
-  maxBitsForHashrate,
+  maxZBitsForHashrate,
   nbitsToSharenote,
-  noteFromBits,
-  noteFromComponents,
   noteFromHashrate,
+  noteFromZBits,
   parseHashrate,
-  parseNoteLabel,
   planSharenoteFromHashrate,
   probabilityPerHash,
   requiredHashrateMean,
   requiredHashrateQuantile,
   targetFor,
   humanHashrate,
+  ensureNote,
 } from "./index";
 
 const LOG_2 = Math.log(2);
 
 describe("note conversions", () => {
-  it("normalises cents and bits", () => {
-    const note = noteFromComponents(33, 53);
+  it("normalises cents and zbits", () => {
+    const note = ensureNote({ z: 33, cents: 53 });
     expect(note.z).toBe(33);
     expect(note.cents).toBe(53);
-    expect(note.bits).toBeCloseTo(33 + 53 * CENT_BIT_STEP, 12);
+    expect(note.zBits).toBeCloseTo(33 + 53 * CENT_ZBIT_STEP, 12);
     expect(note.label).toBe("33Z53");
   });
 
   it("parses multiple label forms", () => {
-    expect(parseNoteLabel("33Z53")).toEqual({ z: 33, cents: 53 });
-    expect(parseNoteLabel("33Z 53CZ")).toEqual({ z: 33, cents: 53 });
-    expect(parseNoteLabel("33Z53cz")).toEqual({ z: 33, cents: 53 });
-    expect(parseNoteLabel("33.53Z")).toEqual({ z: 33, cents: 53 });
-    expect(parseNoteLabel("33z")).toEqual({ z: 33, cents: 0 });
+    const cases = [
+      { label: "33Z53", cents: 53 },
+      { label: "33Z 53CZ", cents: 53 },
+      { label: "33Z53cz", cents: 53 },
+      { label: "33.53Z", cents: 53 },
+      { label: "33z", cents: 0 },
+    ];
+    for (const { label, cents } of cases) {
+      const note = ensureNote(label);
+      expect(note.z).toBe(33);
+      expect(note.cents).toBe(cents);
+    }
   });
 
-  it("round-trips bits to note and back", () => {
-    const bits = 33 + 53 * CENT_BIT_STEP;
-    expect(noteFromBits(bits).label).toBe("33Z53");
+  it("round-trips zBits to note and back", () => {
+    const zBits = 33 + 53 * CENT_ZBIT_STEP;
+    const note = noteFromZBits(zBits);
+    expect(note.label).toBe("33Z53");
+    expect(note.zBits).toBeCloseTo(zBits, 12);
+  });
+
+  it("preserves precise zBits while formatting friendly labels", () => {
+    const precise = 33.537812;
+    const note = noteFromZBits(precise);
+    expect(note.label).toBe("33Z53");
+    expect(note.zBits).toBeCloseTo(precise, 12);
   });
 
   it("converts compact nBits to Sharenote label", () => {
     const note = nbitsToSharenote("19752b59");
-    expect(note.bits).toBeCloseTo(57.12, 6);
+    const value = Number.parseInt("19752b59", 16);
+    const exponent = value >>> 24;
+    const mantissa = value & 0xffffff;
+    const expected =
+      256 - (Math.log2(mantissa) + 8 * (exponent - 3));
+    expect(note.zBits).toBeCloseTo(expected, 12);
     expect(note.label).toBe("57Z12");
   });
 
@@ -68,29 +88,29 @@ describe("note conversions", () => {
 describe("probabilities and hashrates", () => {
   it("computes probability per hash", () => {
     const p = probabilityPerHash("33Z53");
-    const bits = noteFromComponents(33, 53).bits;
-    expect(p).toBeCloseTo(2 ** -bits, 18);
+    const zBits = ensureNote({ z: 33, cents: 53 }).zBits;
+    expect(p).toBeCloseTo(2 ** -zBits, 18);
   });
 
   it("formats probability displays", () => {
-    const note = noteFromComponents(33, 53);
-    expect(formatProbabilityDisplay(note.bits, 5)).toBe("1 / 2^33.53000");
+    const note = ensureNote({ z: 33, cents: 53 });
+    expect(formatProbabilityDisplay(note.zBits, 5)).toBe("1 / 2^33.53000");
   });
 
   it("computes expected hashes", () => {
     const hashes = expectedHashesForNote("33Z53");
-    expect(hashes).toBeCloseTo(1 / probabilityPerHash("33Z53"), 6);
+    expect(hashes.floatValue()).toBeCloseTo(1 / probabilityPerHash("33Z53"), 6);
   });
 
   it("derives mean and quantile hashrate requirements", () => {
-    const note = noteFromComponents(33, 53);
-    const expectedMean = 2 ** note.bits / 5;
+    const note = ensureNote({ z: 33, cents: 53 });
+    const expectedMean = 2 ** note.zBits / 5;
     const mean = requiredHashrateMean("33Z53", 5);
-    expect(mean).toBeCloseTo(expectedMean, 6);
+    expect(mean.floatValue()).toBeCloseTo(expectedMean, 6);
 
     const expectedQ95 = expectedMean * -Math.log(1 - 0.95);
     const q95 = requiredHashrateQuantile("33Z53", 5, 0.95);
-    expect(q95).toBeCloseTo(expectedQ95, 6);
+    expect(q95.floatValue()).toBeCloseTo(expectedQ95, 6);
   });
 
   it("converts hashrate back to note label", () => {
@@ -118,8 +138,8 @@ describe("probabilities and hashrates", () => {
   });
 
   it("computes maximum bits for a given hashrate", () => {
-    const bits = maxBitsForHashrate(2.480651469003486e9, 5);
-    expect(bits).toBeCloseTo(noteFromComponents(33, 53).bits, 6);
+    const zBits = maxZBitsForHashrate(2.480651469003486e9, 5);
+    expect(zBits).toBeCloseTo(ensureNote({ z: 33, cents: 53 }).zBits, 6);
   });
 
   it("plans sharenotes from human hashrate strings", () => {
@@ -172,7 +192,7 @@ describe("utility helpers", () => {
     });
     expect(estimate.label).toBe("33Z53");
     const expectedPrimary =
-      (2 ** estimate.bits / 5) * -Math.log(1 - 0.95);
+      (2 ** estimate.zBits / 5) * -Math.log(1 - 0.95);
     expect(estimate.requiredHashratePrimary).toBeCloseTo(
       expectedPrimary,
       6
@@ -191,23 +211,36 @@ describe("utility helpers", () => {
   it("combines notes serially", () => {
     const combined = combineNotesSerial(["33Z53", "20Z10"]);
     expect(combined.label).toBe("33Z53");
-    expect(combined.bits).toBeCloseTo(33.53, 6);
+    const noteA = ensureNote({ z: 33, cents: 53 });
+    const noteB = ensureNote({ z: 20, cents: 10 });
+    const expected = Math.log2(
+      2 ** noteA.zBits + 2 ** noteB.zBits
+    );
+    expect(combined.zBits).toBeCloseTo(expected, 12);
   });
 
   it("computes note differences", () => {
     const diff = noteDifference("33Z53", "20Z10");
     expect(diff.label).toBe("33Z52");
-    expect(diff.bits).toBeCloseTo(33.52, 6);
+    const noteA = ensureNote({ z: 33, cents: 53 });
+    const noteB = ensureNote({ z: 20, cents: 10 });
+    const expected = Math.log2(2 ** noteA.zBits - 2 ** noteB.zBits);
+    expect(diff.zBits).toBeCloseTo(expected, 12);
   });
 
-  it("scales note bits", () => {
+  it("scales note zBits", () => {
     const scaled = scaleNote("20Z10", 1.5);
     expect(scaled.label).toBe("20Z68");
-    expect(scaled.bits).toBeCloseTo(20.68, 6);
+    const base = ensureNote({ z: 20, cents: 10 });
+    const expected = Math.log2(2 ** base.zBits * 1.5);
+    expect(scaled.zBits).toBeCloseTo(expected, 12);
   });
 
   it("divides note difficulties", () => {
     const ratio = divideNote("33Z53", "20Z10");
-    expect(ratio).toBeCloseTo(11036.537462, 6);
+    const noteA = ensureNote({ z: 33, cents: 53 });
+    const noteB = ensureNote({ z: 20, cents: 10 });
+    const expected = Math.pow(2, noteA.zBits) / Math.pow(2, noteB.zBits);
+    expect(ratio).toBeCloseTo(expected, 6);
   });
 });

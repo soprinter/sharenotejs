@@ -49,13 +49,14 @@ console.log(bill.probabilityDisplay);                 // "1 / 2^33.53000"
 Represent notes as structured objects or canonical strings so maths and presentation stay in sync.
 
 ```ts
-import { noteFromComponents, parseNoteLabel, noteFromBits } from "@soprinter/sharenotejs";
+import { noteFromComponents, parseNoteLabel, noteFromZBits } from "@soprinter/sharenotejs";
 
 const parsed = parseNoteLabel("33Z 53CZ"); // { z: 33, cents: 53 }
 const note = noteFromComponents(parsed.z, parsed.cents);
-console.log(note.label); // "33Z53"
+console.log(note.label);  // "33Z53"
+console.log(note.zBits);  // 33.53
 
-const recovered = noteFromBits(note.bits);
+const recovered = noteFromZBits(note.zBits);
 console.log(recovered.label); // "33Z53"
 ```
 
@@ -131,7 +132,7 @@ console.log(bills[0].probabilityDisplay);            // "1 / 2^33.53000"
 ```
 
 ### Compose Note Difficulties
-Add, subtract, scale or compare proofs without leaving canonical space.
+Add, subtract, scale or compare proofs without leaving canonical Z-bit space.
 
 ```ts
 import {
