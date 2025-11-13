@@ -153,6 +153,19 @@ class HashrateRange {
   }
 }
 
+const float64Buffer = new Float64Array(1);
+const float64Bits = new BigUint64Array(float64Buffer.buffer);
+const HASHRATE_RANGE_FUDGE_STEPS = 8n;
+
+function nextDown(value: number, steps: bigint = 1n): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    return value;
+  }
+  float64Buffer[0] = value;
+  float64Bits[0] -= steps;
+  return float64Buffer[0];
+}
+
 class Sharenote {
   readonly z: number;
   readonly cents: number;
@@ -542,10 +555,14 @@ function hashrateRangeForNote(
   options?: HashrateOptions
 ): HashrateRange {
   const resolved = ensureNote(note);
-  const minimum = requiredHashrateValue(resolved, seconds, options);
+  const minimumCandidate = requiredHashrateValue(resolved, seconds, options);
+  const minimum = minimumCandidate > 0
+    ? Math.max(0, nextDown(minimumCandidate, HASHRATE_RANGE_FUDGE_STEPS))
+    : 0;
   const maximumCandidate = requiredHashrateValue(resolved.zBits + CENT_ZBIT_STEP, seconds, options);
-  const maximum = Math.max(minimum, maximumCandidate);
-  return new HashrateRange(minimum, maximum);
+  const adjustedMinimum = Math.min(minimum, maximumCandidate);
+  const maximum = Math.max(adjustedMinimum, maximumCandidate);
+  return new HashrateRange(adjustedMinimum, maximum);
 }
 
 function maxZBitsForHashrate(hashrate: number, seconds: number, multiplier = 1): number {
