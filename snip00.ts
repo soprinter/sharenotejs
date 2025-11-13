@@ -139,6 +139,20 @@ class HashesMeasurement {
   }
 }
 
+class HashrateRange {
+  readonly minimum: number;
+  readonly maximum: number;
+
+  constructor(minimum: number, maximum: number) {
+    this.minimum = minimum;
+    this.maximum = maximum;
+  }
+
+  human(opts?: HumanHashrateOptions): [HumanHashrate, HumanHashrate] {
+    return [humanHashrate(this.minimum, opts), humanHashrate(this.maximum, opts)];
+  }
+}
+
 class Sharenote {
   readonly z: number;
   readonly cents: number;
@@ -190,6 +204,10 @@ class Sharenote {
 
   requiredHashrateQuantileMeasurement(seconds: number, confidence: number): HashrateMeasurement {
     return requiredHashrateQuantile(this, seconds, confidence);
+  }
+
+  hashrateRange(seconds: number, options?: HashrateOptions): HashrateRange {
+    return hashrateRangeForNote(this, seconds, options);
   }
 
   target(): bigint {
@@ -518,6 +536,18 @@ function requiredHashrateQuantileMeasurement(
   return requiredHashrateQuantile(note, seconds, confidence);
 }
 
+function hashrateRangeForNote(
+  note: SharenoteLike,
+  seconds: number,
+  options?: HashrateOptions
+): HashrateRange {
+  const resolved = ensureNote(note);
+  const minimum = requiredHashrateValue(resolved, seconds, options);
+  const maximumCandidate = requiredHashrateValue(resolved.zBits + CENT_ZBIT_STEP, seconds, options);
+  const maximum = Math.max(minimum, maximumCandidate);
+  return new HashrateRange(minimum, maximum);
+}
+
 function maxZBitsForHashrate(hashrate: number, seconds: number, multiplier = 1): number {
   assertFinite(hashrate, "hashrate");
   assertFinite(seconds, "seconds");
@@ -619,7 +649,7 @@ function combineNotesSerial(notes: SharenoteLike[]): Sharenote {
   if (!Array.isArray(notes) || notes.length === 0) {
     throw new SharenoteError("notes array must not be empty");
   }
-  const total = notes.reduce((acc, note) => acc + difficultyFromNote(note), 0);
+  const total = notes.reduce<number>((acc, note) => acc + difficultyFromNote(note), 0);
   if (!Number.isFinite(total) || total <= 0) {
     return noteFromZBits(0);
   }
@@ -796,7 +826,7 @@ function resolveHashrateUnit(
   if (!unit) {
     return { exponent: 0, unit: HashrateUnit.Hps };
   }
-  const raw = typeof unit === "string" ? unit : unit.valueOf();
+  const raw = typeof unit === "string" ? unit : `${unit}`;
   let normalized = raw.toUpperCase().replace(/[_\-\s]+/g, "");
   normalized = normalized.replace(/HPS$/, "H/S").replace(/HS$/, "H/S");
   if (!normalized.endsWith("/S") && normalized.includes("H")) {
@@ -834,7 +864,8 @@ function humanHashrate(hashrate: number, opts?: HumanHashrateOptions): HumanHash
     return { value: 0, unit: HashrateUnit.Hps, display: "0 H/s", exponent: 0 };
   }
   const logValue = Math.log10(hashrate);
-  const index = Math.min(HASHRATE_UNITS.length - 1, Math.max(0, Math.floor(logValue / 3)));
+  const unclampedIndex = Math.floor(logValue / 3);
+  const index = Math.min(HASHRATE_UNITS.length - 1, Math.max(0, unclampedIndex));
   const unit = HASHRATE_UNITS[index];
   const scaled = hashrate / Math.pow(10, unit.exponent * 3);
   let displayValue: string;
@@ -944,6 +975,7 @@ export {
   Sharenote,
   HashrateMeasurement,
   HashesMeasurement,
+  HashrateRange,
   estimateSharenote,
   estimateSharenotes,
   planSharenoteFromHashrate,
@@ -979,6 +1011,7 @@ export {
   requiredHashrateMeasurement,
   requiredHashrateMeanMeasurement,
   requiredHashrateQuantileMeasurement,
+  hashrateRangeForNote,
   withMultiplier,
   withReliability,
   withConfidence,
@@ -1010,6 +1043,7 @@ export type {
   HashrateParseInput,
   HashratePlanOptions,
   SharenotePlan,
+  HashrateRange,
 };
 function compareNotes(a: SharenoteLike, b: SharenoteLike): number {
   const noteA = ensureNote(a);

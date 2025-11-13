@@ -26,6 +26,7 @@ import {
   targetFor,
   humanHashrate,
   ensureNote,
+  hashrateRangeForNote,
 } from "./index";
 
 const LOG_2 = Math.log(2);
@@ -124,6 +125,27 @@ describe("probabilities and hashrates", () => {
     expect(note.label).toBe("33Z53");
   });
 
+  it("exposes hashrate ranges that contain the source hashrate", () => {
+    const seconds = 5;
+    const input = parseHashrate("1000 MH/s");
+    const note = noteFromHashrate(input, seconds);
+    const range = hashrateRangeForNote(note, seconds);
+    expect(range.minimum).toBeLessThanOrEqual(input);
+    expect(range.maximum).toBeGreaterThan(input);
+    const lowerNote = noteFromHashrate(range.minimum, seconds);
+    expect(lowerNote.label).toBe(note.label);
+  });
+
+  it("expands hashrate range when reliability increases", () => {
+    const note = ensureNote("33Z53");
+    const base = hashrateRangeForNote(note, 5);
+    const often = hashrateRangeForNote(note, 5, {
+      reliability: ReliabilityId.Often95,
+    });
+    expect(often.minimum).toBeGreaterThan(base.minimum);
+    expect(often.maximum).toBeGreaterThan(base.maximum);
+  });
+
   it("parses human readable hashrates", () => {
     expect(parseHashrate("5 GH/s")).toBeCloseTo(5e9, 3);
     expect(parseHashrate("12.5 MH/s")).toBeCloseTo(12.5e6, 3);
@@ -184,6 +206,12 @@ describe("utility helpers", () => {
     const human = humanHashrate(3.2e9);
     expect(human.unit).toBe("GH/s");
     expect(human.display).toContain("3.20");
+  });
+
+  it("keeps tiny hashrates in H/s", () => {
+    const human = humanHashrate(0.25, { precision: 2 });
+    expect(human.unit).toBe("H/s");
+    expect(human.display).toBe("0.25 H/s");
   });
 
   it("produces bill estimates", () => {

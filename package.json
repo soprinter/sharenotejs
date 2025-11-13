@@ -1,6 +1,6 @@
 {
   "name": "@soprinter/sharenotejs",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Reference JavaScript/TypeScript SDK for the Sharenote protocol",
   "license": "MIT",
   "type": "module",
