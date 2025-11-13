@@ -1060,7 +1060,6 @@ export type {
   HashrateParseInput,
   HashratePlanOptions,
   SharenotePlan,
-  HashrateRange,
 };
 function compareNotes(a: SharenoteLike, b: SharenoteLike): number {
   const noteA = ensureNote(a);
