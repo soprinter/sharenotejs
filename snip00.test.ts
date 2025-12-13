@@ -1,3 +1,7 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -30,6 +34,18 @@ import {
 } from "./index";
 
 const LOG_2 = Math.log(2);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const ARITHMETIC_VECTORS_PATH = path.resolve(__dirname, "snip00_tests.json");
+const ARITHMETIC_VECTORS = JSON.parse(
+  fs.readFileSync(ARITHMETIC_VECTORS_PATH, "utf8")
+) as { cases: any[] };
+
+function expectCloseRelative(actual: number, expected: number, relTol = 1e-9, absTol = 0) {
+  const diff = Math.abs(actual - expected);
+  const allowed = Math.max(absTol, Math.abs(expected) * relTol);
+  expect(diff).toBeLessThanOrEqual(allowed);
+}
 
 describe("note conversions", () => {
   it("normalises cents and zbits", () => {
@@ -271,4 +287,58 @@ describe("utility helpers", () => {
     const expected = Math.pow(2, noteA.zBits) / Math.pow(2, noteB.zBits);
     expect(ratio).toBeCloseTo(expected, 6);
   });
+});
+
+describe("arithmetic vectors (json)", () => {
+  for (const testCase of ARITHMETIC_VECTORS.cases.filter(
+    (c) => c.operation === "add"
+  )) {
+    it(`add: ${testCase.name}`, () => {
+      const labels = testCase.inputs.map((i: any) => i.label);
+      const result = combineNotesSerial(labels);
+      expect(result.label).toBe(testCase.expected.label);
+      expect(result.zBits).toBeCloseTo(testCase.expected.z_bits, 6);
+      const difficulty = 2 ** result.zBits;
+      expectCloseRelative(difficulty, testCase.expected.difficulty, 1e-9, 1e-6);
+    });
+  }
+
+  for (const testCase of ARITHMETIC_VECTORS.cases.filter(
+    (c) => c.operation === "subtract"
+  )) {
+    it(`subtract: ${testCase.name}`, () => {
+      const result = noteDifference(
+        testCase.inputs.minuend.label,
+        testCase.inputs.subtrahend.label
+      );
+      expect(result.label).toBe(testCase.expected.label);
+      expect(result.zBits).toBeCloseTo(testCase.expected.z_bits, 6);
+    });
+  }
+
+  for (const testCase of ARITHMETIC_VECTORS.cases.filter(
+    (c) => c.operation === "scale"
+  )) {
+    it(`scale: ${testCase.name}`, () => {
+      const result = scaleNote(testCase.inputs.note.label, testCase.inputs.factor);
+      expect(result.label).toBe(testCase.expected.label);
+      expect(result.zBits).toBeCloseTo(testCase.expected.z_bits, 6);
+    });
+  }
+
+  for (const testCase of ARITHMETIC_VECTORS.cases.filter(
+    (c) => c.operation === "divide"
+  )) {
+    it(`divide: ${testCase.name}`, () => {
+      const ratio = divideNote(
+        testCase.inputs.numerator.label,
+        testCase.inputs.denominator.label
+      );
+      expectCloseRelative(ratio, testCase.expected.ratio, 1e-9, 1e-12);
+      const numerator = ensureNote(testCase.inputs.numerator.label);
+      const denominator = ensureNote(testCase.inputs.denominator.label);
+      const expected = Math.pow(2, numerator.zBits - denominator.zBits);
+      expectCloseRelative(ratio, expected, 1e-9, 1e-12);
+    });
+  }
 });

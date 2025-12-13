@@ -367,8 +367,12 @@ function parseLabel(label: string): Sharenote {
 function labelComponentsFromZBits(zBits: number): { z: number; cents: number } {
   const z = Math.floor(zBits);
   const fractional = zBits - z;
-  const rawCents = Math.floor(fractional / CENT_ZBIT_STEP + 1e-9);
-  return { z: z < 0 ? 0 : z, cents: clampCentZ(rawCents) };
+  // Use floor with a tiny epsilon to avoid floating drift pushing us below the intended cent.
+  let cents = Math.floor(fractional / CENT_ZBIT_STEP + 1e-9);
+  if (cents >= CENTZ_UNITS_PER_Z) {
+    return { z: z + 1, cents: 0 };
+  }
+  return { z: z < 0 ? 0 : z, cents: clampCentZ(cents) };
 }
 
 function zBitsFromComponents(z: number, cents: number): number {
