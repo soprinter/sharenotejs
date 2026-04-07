@@ -6,3 +6,7 @@
  */
 
 export * from "./snip00";
+export * as snip02 from "./snip02";
+export * as snip03 from "./snip03";
+export * as snip04 from "./snip04";
+export * as snip05 from "./snip05";
