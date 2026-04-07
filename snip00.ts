@@ -619,6 +619,30 @@ function targetFor(note: SharenoteLike): bigint {
   return (base * BigInt(scaleFactor)) >> BigInt(precisionBits);
 }
 
+/**
+ * ContinuousDifficulty recovers continuous Z-bits from a raw 256-bit target.
+ * This is the mathematical inverse of targetFor: given a target T,
+ * it returns zbits = 256 - log2(T).
+ *
+ * Used for V1 continuous ledger accounting so that pools can account
+ * for continuous physical entropy without truncation losses.
+ */
+function continuousDifficulty(target: bigint): number {
+  if (target <= 0n) {
+    throw new SharenoteError("target must be positive");
+  }
+  // Convert bigint to float via string to avoid precision loss
+  const val = Number(target);
+  if (!Number.isFinite(val) || val <= 0) {
+    throw new SharenoteError("target overflows float64");
+  }
+  const zbits = 256 - Math.log2(val);
+  if (!Number.isFinite(zbits) || zbits < 0) {
+    throw new SharenoteError("target produces invalid zbits");
+  }
+  return zbits;
+}
+
 function targetToCompact(target: bigint): number {
   if (target <= 0n) {
     throw new SharenoteError("target must be positive");
@@ -773,6 +797,11 @@ function estimateSharenotes(
 ): BillEstimate[] {
   return notes.map((note) => estimateSharenote(note, seconds, options));
 }
+
+/** Canonical alias matching the Go SDK name `EstimateNote`. */
+const estimateNote = estimateSharenote;
+/** Canonical alias matching the Go SDK name `EstimateNotes`. */
+const estimateNotes = estimateSharenotes;
 
 function planSharenoteFromHashrate(options: HashratePlanOptions): SharenotePlan {
   const { hashrate, seconds, ...estimateOptions } = options;
@@ -999,6 +1028,8 @@ export {
   HashrateRange,
   estimateSharenote,
   estimateSharenotes,
+  estimateNote,
+  estimateNotes,
   planSharenoteFromHashrate,
   combineNotesSerial,
   noteDifference,
@@ -1045,6 +1076,7 @@ export {
   withPlanReliability,
   withPlanConfidence,
   targetFor,
+  continuousDifficulty,
   sharenoteToNBits,
   nbitsToSharenote,
   formatProbabilityDisplay,
