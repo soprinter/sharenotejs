@@ -169,18 +169,41 @@ function nextDown(value: number, steps: bigint = 1n): number {
 class Sharenote {
   readonly z: number;
   readonly cents: number;
+  /**
+   * Floating-point Z-bits. This is a DERIVED DISPLAY value only; the
+   * authoritative difficulty is the exact dyadic rational returned by
+   * {@link Sharenote#difficultyExact}. Aggregation must never accumulate this
+   * float (see {@link combineNotesSerial}).
+   */
   readonly zBits: number;
   private readonly labelOverride?: string;
+  private readonly storedExactDifficulty?: ExactDifficulty;
 
-  constructor(z: number, cents: number, zBits: number, labelOverride?: string) {
+  constructor(
+    z: number,
+    cents: number,
+    zBits: number,
+    labelOverride?: string,
+    exactDifficulty?: ExactDifficulty
+  ) {
     this.z = z;
     this.cents = cents;
     this.zBits = zBits;
     this.labelOverride = labelOverride;
+    this.storedExactDifficulty = exactDifficulty;
   }
 
   get label(): string {
     return this.labelOverride ?? formatLabel(this.z, this.cents);
+  }
+
+  /**
+   * Returns the exact difficulty (2^zBits) as a dyadic rational `sig * 2^exp`.
+   * Combined notes carry the exact accumulated sum; other notes derive it
+   * losslessly from their float64 difficulty, which is itself a dyadic rational.
+   */
+  difficultyExact(): ExactDifficulty {
+    return this.storedExactDifficulty ?? decomposeFloatToExact(difficultyFromZBits(this.zBits));
   }
 
   toString(): string {
@@ -422,6 +445,111 @@ function mustNoteFromZBits(zBits: number): Sharenote {
 
 function difficultyFromZBits(zBits: number): number {
   return 2 ** zBits;
+}
+
+// ==========================================================================
+// Exact (rational) difficulty arithmetic
+//
+// A note's difficulty is 2^zBits. When zBits is a float64, 2^zBits is itself a
+// float64, and every finite float64 is EXACTLY a dyadic rational `sig * 2^exp`
+// with `sig` an integer. We decompose difficulties into that exact form and
+// accumulate with BigInt arithmetic so serial aggregation has no float64
+// accumulation drift (SNIP-00 Appendix C — Arithmetic in Sharenote Space).
+// ==========================================================================
+
+/** Exact dyadic-rational difficulty: value === sig * 2^exp, sig >= 0n. */
+interface ExactDifficulty {
+  sig: bigint;
+  exp: number;
+}
+
+const FLOAT_DECOMPOSE_VIEW = new DataView(new ArrayBuffer(8));
+
+/** Decompose a finite float64 into its exact dyadic rational `sig * 2^exp`. */
+function decomposeFloatToExact(value: number): ExactDifficulty {
+  if (!Number.isFinite(value) || value <= 0) {
+    return { sig: 0n, exp: 0 };
+  }
+  FLOAT_DECOMPOSE_VIEW.setFloat64(0, value, false);
+  const hi = FLOAT_DECOMPOSE_VIEW.getUint32(0, false);
+  const lo = FLOAT_DECOMPOSE_VIEW.getUint32(4, false);
+  const expField = (hi >>> 20) & 0x7ff;
+  const mantissa = ((BigInt(hi) & 0xfffffn) << 32n) | BigInt(lo >>> 0);
+  if (expField === 0) {
+    // Subnormal: value = mantissa * 2^-1074.
+    return normalizeExactDifficulty({ sig: mantissa, exp: -1074 });
+  }
+  // Normal: value = (2^52 + mantissa) * 2^(expField - 1075).
+  return normalizeExactDifficulty({ sig: (1n << 52n) | mantissa, exp: expField - 1075 });
+}
+
+/** Strip shared trailing zero bits so equal values share a canonical form. */
+function normalizeExactDifficulty(value: ExactDifficulty): ExactDifficulty {
+  if (value.sig <= 0n) {
+    return { sig: 0n, exp: 0 };
+  }
+  let { sig } = value;
+  let { exp } = value;
+  while ((sig & 1n) === 0n) {
+    sig >>= 1n;
+    exp += 1;
+  }
+  return { sig, exp };
+}
+
+/** Exactly sum dyadic-rational difficulties with BigInt arithmetic. */
+function sumExactDifficulties(values: ExactDifficulty[]): ExactDifficulty {
+  const terms = values.filter((v) => v.sig > 0n);
+  if (terms.length === 0) {
+    return { sig: 0n, exp: 0 };
+  }
+  let minExp = terms[0].exp;
+  for (const term of terms) {
+    if (term.exp < minExp) {
+      minExp = term.exp;
+    }
+  }
+  let total = 0n;
+  for (const term of terms) {
+    total += term.sig << BigInt(term.exp - minExp);
+  }
+  return normalizeExactDifficulty({ sig: total, exp: minExp });
+}
+
+/** Correctly-rounded log2 of an exact difficulty, computed without float drift. */
+function zBitsFromExactDifficulty(value: ExactDifficulty): number {
+  if (value.sig <= 0n) {
+    throw new SharenoteError("difficulty must be > 0");
+  }
+  const bitLength = value.sig.toString(2).length;
+  const keepBits = 63;
+  const shift = bitLength - keepBits;
+  if (shift <= 0) {
+    return Math.log2(Number(value.sig)) + value.exp;
+  }
+  // Round the retained mantissa to nearest-even using the dropped low bits.
+  const shiftBig = BigInt(shift);
+  const dropped = value.sig & ((1n << shiftBig) - 1n);
+  let top = value.sig >> shiftBig;
+  const half = 1n << (shiftBig - 1n);
+  if (dropped > half || (dropped === half && (top & 1n) === 1n)) {
+    top += 1n;
+  }
+  return Math.log2(Number(top)) + shift + value.exp;
+}
+
+/** Best-effort float64 of an exact difficulty (single rounding, no drift). */
+function exactDifficultyToNumber(value: ExactDifficulty): number {
+  if (value.sig <= 0n) {
+    return 0;
+  }
+  const bitLength = value.sig.toString(2).length;
+  const keepBits = 53;
+  const shift = bitLength - keepBits;
+  if (shift <= 0) {
+    return Number(value.sig) * 2 ** value.exp;
+  }
+  return Number(value.sig >> BigInt(shift)) * 2 ** (shift + value.exp);
 }
 
 function zBitsFromDifficulty(difficulty: number): number {
@@ -694,11 +822,20 @@ function combineNotesSerial(notes: SharenoteLike[]): Sharenote {
   if (!Array.isArray(notes) || notes.length === 0) {
     throw new SharenoteError("notes array must not be empty");
   }
-  const total = notes.reduce<number>((acc, note) => acc + difficultyFromNote(note), 0);
-  if (!Number.isFinite(total) || total <= 0) {
+  // Serial aggregation sums difficulties. Each note's difficulty (2^zBits) is a
+  // float64 and therefore an exact dyadic rational, so we accumulate with BigInt
+  // arithmetic instead of a float64 reduce — this removes accumulation drift for
+  // long or ill-conditioned chains (SNIP-00 Appendix C). The exact sum is stored
+  // on the resulting note; zBits is only the derived display value.
+  const exactTotal = sumExactDifficulties(
+    notes.map((note) => decomposeFloatToExact(difficultyFromNote(note)))
+  );
+  if (exactTotal.sig <= 0n) {
     return noteFromZBits(0);
   }
-  return noteFromZBits(zBitsFromDifficulty(total));
+  const zBits = zBitsFromExactDifficulty(exactTotal);
+  const { z, cents } = labelComponentsFromZBits(zBits);
+  return new Sharenote(z, cents, zBits, undefined, exactTotal);
 }
 
 function noteDifference(minuend: SharenoteLike, subtrahend: SharenoteLike): Sharenote {
@@ -717,11 +854,15 @@ function scaleNote(note: SharenoteLike, factor: number): Sharenote {
   if (factor === 0) {
     return noteFromZBits(0);
   }
+  // No clamp: the scaled difficulty maps directly through log2 to zBits, matching
+  // the Go SDK (and the JS/Go majority). We deliberately do NOT snap sub-unit
+  // results to 0Z00 — a factor of 0 is the only value that yields 0Z00.
   const scaled = difficultyFromNote(note) * factor;
   return noteFromZBits(zBitsFromDifficulty(scaled));
 }
 
-function divideNote(numerator: SharenoteLike, denominator: SharenoteLike): number {
+/** Canonical difficulty ratio. Matches the Go SDK `DivideNotes`. */
+function divideNotes(numerator: SharenoteLike, denominator: SharenoteLike): number {
   const den = difficultyFromNote(denominator);
   if (den <= 0) {
     throw new SharenoteError("division by zero-difficulty note");
@@ -729,6 +870,12 @@ function divideNote(numerator: SharenoteLike, denominator: SharenoteLike): numbe
   const num = difficultyFromNote(numerator);
   return num / den;
 }
+
+/**
+ * @deprecated Use {@link divideNotes}. Thin backward-compatible alias
+ * (identical function reference) kept for existing callers.
+ */
+const divideNote = divideNotes;
 
 function reliabilityById(id: ReliabilityId): ReliabilityLevel {
   return RELIABILITY_LEVELS[id];
@@ -754,7 +901,11 @@ function resolveMultiplier(
   return { multiplier: 1, quantile: null };
 }
 
-function estimateSharenote(note: SharenoteLike, seconds: number, options?: EstimateOptions): BillEstimate {
+/**
+ * Canonical estimator. Computes a {@link BillEstimate} for a note and window.
+ * Matches the Go SDK `EstimateNote`.
+ */
+function estimateNote(note: SharenoteLike, seconds: number, options?: EstimateOptions): BillEstimate {
   assertFinite(seconds, "seconds");
   if (seconds <= 0) {
     throw new SharenoteError("seconds must be > 0");
@@ -790,18 +941,27 @@ function estimateSharenote(note: SharenoteLike, seconds: number, options?: Estim
   };
 }
 
-function estimateSharenotes(
+/**
+ * Canonical multi-note estimator. Matches the Go SDK `EstimateNotes`.
+ */
+function estimateNotes(
   notes: SharenoteLike[],
   seconds: number,
   options?: EstimateOptions
 ): BillEstimate[] {
-  return notes.map((note) => estimateSharenote(note, seconds, options));
+  return notes.map((note) => estimateNote(note, seconds, options));
 }
 
-/** Canonical alias matching the Go SDK name `EstimateNote`. */
-const estimateNote = estimateSharenote;
-/** Canonical alias matching the Go SDK name `EstimateNotes`. */
-const estimateNotes = estimateSharenotes;
+/**
+ * @deprecated Use {@link estimateNote}. Thin backward-compatible alias
+ * (identical function reference) kept for existing callers.
+ */
+const estimateSharenote = estimateNote;
+/**
+ * @deprecated Use {@link estimateNotes}. Thin backward-compatible alias
+ * (identical function reference) kept for existing callers.
+ */
+const estimateSharenotes = estimateNotes;
 
 function planSharenoteFromHashrate(options: HashratePlanOptions): SharenotePlan {
   const { hashrate, seconds, ...estimateOptions } = options;
@@ -817,7 +977,7 @@ function planSharenoteFromHashrate(options: HashratePlanOptions): SharenotePlan 
     reliability: estimateOptions.reliability,
     multiplier: estimateOptions.multiplier,
   });
-  const bill = estimateSharenote(note, seconds, estimateOptions);
+  const bill = estimateNote(note, seconds, estimateOptions);
   return {
     sharenote: note,
     bill,
@@ -1034,6 +1194,7 @@ export {
   combineNotesSerial,
   noteDifference,
   scaleNote,
+  divideNotes,
   divideNote,
   compareNotes,
   ensureNote,
@@ -1082,9 +1243,14 @@ export {
   formatProbabilityDisplay,
   zBitsFromDifficulty,
   difficultyFromZBits,
+  decomposeFloatToExact,
+  sumExactDifficulties,
+  zBitsFromExactDifficulty,
+  exactDifficultyToNumber,
 };
 
 export type {
+  ExactDifficulty,
   ReliabilityLevel,
   HumanHashrate,
   HumanHashrateOptions,

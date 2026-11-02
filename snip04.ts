@@ -5,7 +5,8 @@
  * events that package merged-mining block headers into verifiable payloads.
  */
 
-import { createHash } from "crypto";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 
 export const KIND_SHARENOTE = 35510;
 
@@ -118,12 +119,13 @@ export function validateHeaderHash(sn: Sharenote): void {
     throw new Error("both headerHex and headerHash are required for validation");
   }
 
-  const headerBytes = Buffer.from(sn.headerHex, "hex");
-  const first = createHash("sha256").update(headerBytes).digest();
-  const second = createHash("sha256").update(first).digest();
+  const headerBytes = hexToBytes(sn.headerHex);
+  // Double SHA-256 via @noble/hashes keeps this browser-portable (no node "crypto").
+  const first = sha256(headerBytes);
+  const second = sha256(first);
   // Byte-reverse for block hash display format.
-  const reversed = Buffer.from(second).reverse();
-  const computed = reversed.toString("hex");
+  const reversed = second.slice().reverse();
+  const computed = bytesToHex(reversed);
   if (computed !== sn.headerHash) {
     throw new Error(`header hash mismatch: computed ${computed}, got ${sn.headerHash}`);
   }
