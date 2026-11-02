@@ -1,0 +1,122 @@
+# Release workflow for @soprinter/sharenotejs (publishes to the public npm registry).
+#
+# Mirrors the ohstr release pattern: workflow_dispatch only, driven by
+# CHANGELOG.md. No git push or release event ever triggers a release -- a
+# release is cut by hand from this workflow's "Run workflow" button.
+#
+# ONE-TIME MAINTAINER SETUP:
+#   Create an npm *automation* access token for the account/org that owns
+#   @soprinter and add it as a repository secret named NPM_TOKEN
+#   (Settings -> Secrets and variables -> Actions -> New repository secret).
+#
+# NOTE: this GitHub repo is PRIVATE while the npm package @soprinter/sharenotejs
+# is PUBLIC. npm provenance (--provenance) requires a PUBLIC source repository,
+# so we deliberately do NOT pass --provenance here.
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Version to release (e.g. 1.0.0, no "v" prefix). Leave blank to use
+          the topmost "## [X.Y.Z]" heading in CHANGELOG.md.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+
+      # Build/test gate, same commands as .github/workflows/ci.yml. A
+      # release is never cut from a state that wouldn't also pass CI.
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      # No git event ever triggers a release by itself (see `on:` above,
+      # workflow_dispatch only) and GitHub never auto-writes the release
+      # notes: they always come from CHANGELOG.md, maintained by hand as
+      # part of normal development.
+      - name: Resolve version and notes from CHANGELOG.md
+        id: changelog
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          VERSION="$VERSION_INPUT"
+          if [ -z "$VERSION" ]; then
+            TOP_HEADING=$(grep -m1 -oP '^## \[\K[^\]]+' CHANGELOG.md || true)
+            if [ "$TOP_HEADING" = "Unreleased" ]; then
+              echo "::error::Topmost CHANGELOG.md heading is '## [Unreleased]' - rename it to the version being released (e.g. '## [1.1.0]') and commit that before running this workflow, or pass the version input explicitly"
+              exit 1
+            fi
+            VERSION="$TOP_HEADING"
+          fi
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not resolve a version: no version input given and no '## [X.Y.Z]' heading found in CHANGELOG.md"
+            exit 1
+          fi
+
+          awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > /tmp/notes.raw
+
+          # Trim leading/trailing blank lines.
+          sed -e '/./,$!d' -e ':a' -e '/^\n*$/{$d;N;ba' -e '}' /tmp/notes.raw > /tmp/release-notes.md
+
+          if [ ! -s /tmp/release-notes.md ]; then
+            echo "::error::No changelog entry found for version $VERSION in CHANGELOG.md (heading missing or section is empty)"
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved release version: $VERSION"
+          echo "--- release notes ---"
+          cat /tmp/release-notes.md
+
+      # The published version comes from package.json and npm refuses to
+      # republish an existing version, so guard that package.json matches the
+      # CHANGELOG-resolved version before publishing.
+      - name: Assert package.json version matches
+        env:
+          VERSION: ${{ steps.changelog.outputs.version }}
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$PKG_VERSION" != "$VERSION" ]; then
+            echo "::error::package.json version ($PKG_VERSION) does not match the release version ($VERSION) - bump package.json's version and commit it before releasing"
+            exit 1
+          fi
+
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Create the GitHub Release last, with the CHANGELOG.md section above as
+      # its notes. gh creates the v<version> tag at this commit.
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.changelog.outputs.version }}
+        run: gh release create "v$VERSION" --target "$GITHUB_SHA" --title "v$VERSION" --notes-file /tmp/release-notes.md
