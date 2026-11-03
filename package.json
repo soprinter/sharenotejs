@@ -1,8 +1,8 @@
 {
   "name": "@soprinter/sharenotejs",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Reference JavaScript/TypeScript SDK for the Sharenote protocol",
-  "license": "MIT",
+  "license": "CC0-1.0",
   "type": "module",
   "main": "dist/index.cjs",
   "module": "dist/index.js",
@@ -13,13 +13,18 @@
   "sideEffects": false,
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     }
   },
   "scripts": {
-    "build": "tsup index.ts --format esm,cjs --dts",
+    "build": "tsup src/index.ts --format esm,cjs --dts",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "test": "vitest run",

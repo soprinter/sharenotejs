@@ -4,14 +4,21 @@
 # CHANGELOG.md. No git push or release event ever triggers a release -- a
 # release is cut by hand from this workflow's "Run workflow" button.
 #
-# ONE-TIME MAINTAINER SETUP:
-#   Create an npm *automation* access token for the account/org that owns
-#   @soprinter and add it as a repository secret named NPM_TOKEN
-#   (Settings -> Secrets and variables -> Actions -> New repository secret).
+# Auth model: npm Trusted Publishing (OIDC) -- NO long-lived NPM_TOKEN.
+# The job requests a short-lived OIDC id-token and npm verifies it against the
+# trusted publisher configured for @soprinter/sharenotejs, so there is no
+# NODE_AUTH_TOKEN and no NPM_TOKEN secret to manage.
 #
-# NOTE: this GitHub repo is PRIVATE while the npm package @soprinter/sharenotejs
-# is PUBLIC. npm provenance (--provenance) requires a PUBLIC source repository,
-# so we deliberately do NOT pass --provenance here.
+# ONE-TIME MAINTAINER SETUP (on npmjs.com, once):
+#   Package @soprinter/sharenotejs -> Settings -> Trusted Publisher ->
+#     Add a GitHub Actions publisher:
+#       Organization or user: soprinter
+#       Repository:           sharenotejs
+#       Workflow filename:    release.yml
+#       Environment:          (leave blank)
+#   OIDC trusted publishing requires npm >= 11.5.1 and Node >= 22.14, so this
+#   workflow upgrades npm before publishing. Because the source repo is PUBLIC,
+#   npm automatically attaches a provenance attestation on publish.
 
 name: Release
 
@@ -26,7 +33,8 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: write   # lets GITHUB_TOKEN create the GitHub Release
+  id-token: write   # required for npm Trusted Publishing (OIDC)
 
 jobs:
   release:
@@ -38,9 +46,13 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           registry-url: "https://registry.npmjs.org"
           cache: npm
+
+      # OIDC trusted publishing needs npm >= 11.5.1; Node 22 ships an older npm.
+      - name: Upgrade npm to a trusted-publishing-capable version
+        run: npm install -g npm@latest
 
       # Build/test gate, same commands as .github/workflows/ci.yml. A
       # release is never cut from a state that wouldn't also pass CI.
@@ -108,10 +120,11 @@ jobs:
             exit 1
           fi
 
-      - name: Publish to npm
+      # Trusted publishing: no NODE_AUTH_TOKEN. npm detects the OIDC id-token
+      # (permissions.id-token: write) and authenticates against the configured
+      # trusted publisher; provenance is attached automatically (public repo).
+      - name: Publish to npm (OIDC trusted publishing)
         run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       # Create the GitHub Release last, with the CHANGELOG.md section above as
       # its notes. gh creates the v<version> tag at this commit.
